@@ -1,0 +1,330 @@
+---
+title: "Project 4 - Ham or Spam"
+author: "Carol Campbell"
+date: "12/8/23"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE)
+
+```
+
+### Assignment
+
+We are to create a program that can classify a text document using training documents that are
+already classified. This program will classify email as ‘spam’, i.e., unwanted email, or
+‘ham’, i.e., wanted email.
+
+### Install necessary packages (only need to do this once)
+```{r}
+
+# install.packages("tm") 
+# install.packages("caTools") 
+# install.packages("caret")
+# install.packages("kernlab")
+# install.packages("R.utils")
+# install.packages("topicmodels")
+# install.packages("quanteda")
+# install.packages ("naivebayes")
+
+```
+
+### Load packages
+```{r echo = FALSE}
+
+library("tidyverse")
+library("stringr")
+library("tm")
+library("SnowballC")
+library("wordcloud")
+library("RColorBrewer")
+library("tm")
+library("e1071")
+library("caTools")
+library("caret")
+library("kernlab") 
+library("rpart")
+library("class")
+library("knitr")
+library("dplyr")
+library("readr")
+library("magrittr")
+```
+
+### Data Source
+
+The files of spam and ham emails were extracted from http://spamassassin.apache.org/old/publiccorpus/ per Prof. Catlin's video. I chose the "20021010_spam.tar.bz2 for spam data", and "20030228_easy_ham_2.tar.bz2" for ham data. 
+Both were downloaded and extracted into a folders on my local computer. 
+
+### Read in both files 
+```{r}
+
+# Loading ham data 
+
+ham_folder <- "C:/Users/Home/Documents/SpamHam/easy_ham2"
+
+spam_folder <- "C:/Users/Home/Documents/SpamHam/spam"
+
+length(list.files(path = ham_folder))
+length(list.files(path = spam_folder))
+
+```
+
+
+### Create list of documemts for both documents
+
+### First I will create folder file for both ham and spam.
+```{r}
+
+ham_files <- list.files(path = ham_folder, full.names = TRUE)
+spam_files <- list.files(path = spam_folder, full.names = TRUE)
+
+```
+
+
+#### Next I will prepare the contents of each folder by loading the files then mutate them using lappy and group function to end up with a list that is transformed into a data frame. During this transformation, a new column, type, is added to each which codes ham emails as type '0', and spam emails as type '1'. We will need this information for downstream processing.  
+```{r}
+
+# Create ham data frame
+
+  ham <- list.files(path = ham_folder) %>%
+  as.data.frame() %>%
+  set_colnames("file") %>%
+  mutate(text = lapply(ham_files, read_lines)) %>%
+  unnest(c(text)) %>%
+  mutate(class = "ham", 
+         type = 0) %>%                              # categorizes spam emails as type 0
+  group_by(file) %>%
+  mutate(text = paste(text, collapse = " ")) %>%
+  ungroup() %>%
+  distinct()
+
+
+# Create spam data frame
+
+spam <- list.files(path = spam_folder) %>%
+  as.data.frame() %>%
+  set_colnames("file") %>%
+  mutate(text = lapply(spam_files, read_lines)) %>%
+  unnest(c(text)) %>%
+  mutate(class = "spam",
+         type = 1) %>%                               # categorizes spam emails as type 1
+  group_by(file) %>%
+  mutate(text = paste(text, collapse = " ")) %>%
+  ungroup() %>%
+  distinct()
+
+
+```
+
+### Combine the spam and ham corpuses
+
+```{r}
+spamham_df <- rbind(spam, ham)%>%
+  select(class,type,file, text)
+
+
+```
+
+
+
+
+### Preparing the Corpuses
+
+Here I will tidy the corpus from both folder files, by removing numbers, punctuation, stopwords and common non-content words, i.e. "like to", "and", "the", "etc.", which have no value. Excess white space will be removed, and finally I will reduce the terms to their stems.
+
+
+
+```{r}
+
+# I kept getting strange errors like "Error in FUN(content(x), ...) : invalid multibyte string 1" so I searched the web and found this suggestion at Stackoverflow.com. After I used it my code ran fine. 
+
+Sys.setlocale("LC_ALL", "C")
+```
+
+
+###  Creating the corpus, and performing additional tidying
+
+Taking a look at the spamham_df reveals that additional tidying is necessary. Here I will use the 'tm' package to assist in removing white space, punctuation and help transform it into a suitable corpus. 
+```{r}
+
+spamham_df$text <- spamham_df$text %>%
+  str_replace(.,"[\\r\\n\\t]+", "")
+
+clean_corpus <- Corpus(VectorSource(spamham_df$text))
+
+cleanCorpus <- clean_corpus  %>% 
+  tm_map(content_transformer(tolower))  %>%
+  tm_map(removeNumbers) %>% 
+  tm_map(removePunctuation) %>% 
+  tm_map(removeWords, stopwords()) %>% 
+  tm_map(stripWhitespace)  
+
+cleanCorpus
+
+```
+
+
+The document-term matrix (dtm) is the mathematical matrix that describes the frequency of terms that occurs in a collection of documents. I will create from the combined corpus.
+
+### Creating the Document Term Matrix
+```{r}
+
+dtm <- DocumentTermMatrix(cleanCorpus)
+
+# Remove outliers of very rare terms or infrequent words
+dtm.99 <- removeSparseTerms(dtm, sparse = 0.99)
+
+inspect(dtm.99)
+
+```
+
+Now that we have ~95% sparsity and can account for 2327 terms, we can visualize our corpus. I chose to use a wordcloud.
+
+### Word cloud for Ham using clean data
+
+
+```{r}
+
+# Spamham word cloud  (reference: ""How to Generate Word Clouds in R", cited at end)
+
+set.seed(5678)                     # to ensure reproducibility 
+wordcloud(cleanCorpus, min.freq = 1000,
+          max.words=150, random.order=FALSE, 
+          colors=brewer.pal(8, "Dark2"))  #from RColorBrewer package
+
+```
+The wordcloud illustrates words from our corpus (in order of prominence) by font size. Here we see that the frequently used words are "received"; "aug"; "esmtp"; "localhost"; and "july".
+
+
+
+#### Shaking up the merged dataframe
+I reshuffled the data frame to ensure randomization.
+
+```{r}
+# reshuffle the data frame
+set.seed(5678)
+rows <- sample(nrow(spamham_df))
+
+spamhamdf2 <- spamham_df[rows, ]
+
+```
+## Training and testing Data using Naive Bayes Classifier
+
+### Split the truncated dataset to create a training and test dataset for Naive Bayes Classifer
+
+- 80% of data is partitioned to be training
+
+- 20% of data is partitioned to be testing (hold outs)
+
+```{r}
+
+# Split the data set into the Training set and Test set
+
+trainIndex <- createDataPartition(spamhamdf2$type, p=0.80, list=FALSE)
+
+dataTrain <- as.data.frame(spamhamdf2[trainIndex,])       # training 
+
+dataTest  <- spamhamdf2[-trainIndex,]       # testing
+
+summary (dataTrain)
+
+summary (dataTest)
+```
+
+We began with a corpus of 1,902 rows, then split it by 80% Training, or 1522 rows(rounded) for the training set. Allocating 20% of the testing set yields us 380 rows, or 20% of 1902, rounded.
+
+### Create and Clean Corpus and Create Term Document Matrix for Training and Test Data
+
+```{r}
+# Create training and test corpus. We will use the 'cleanCorpus' previously created.
+
+train_corpus <- cleanCorpus[1:1522]    #for rows 1 to 1522
+test_corpus <- cleanCorpus[1523:1902]  #for rows 1523 to 1902
+```
+
+
+
+The DTM for our cleanCorpus was previously defined, so we are going to use it to create a "train_dtm" and "test_dtm".
+```{r}
+train_dtm <- dtm.99[1:1522,]                 #pass rows 1-1522 from training set
+test_dtm <- dtm.99[1523:1902,]               #pass rows 1523-1902 from testing set
+
+
+train_dtm
+```
+
+```{r}
+test_dtm
+```
+### Identify words that appear 5 times or more.  
+
+
+```{r}
+five_words <- findFreqTerms(train_dtm, 5)
+
+five_words [1:5]
+
+```
+The five most frequent words/phrases in out training set are "access", "affordable", "aligndcenterbfont", and "aligndmiddle". We will uses these to help train our model
+
+
+### Create a DTM using frequent words.
+
+```{r}
+
+email_train <- DocumentTermMatrix(train_corpus, control=list(dictionary = five_words))
+
+email_test <- DocumentTermMatrix(test_corpus, control=list(dictionary = five_words))
+```
+
+### I got stuck at this point, so in doing research on how best to proceed, I stumbled upon this Text Mining tutorial/example found here  https://www3.nd.edu/~steve/computing_with_data/20_text_mining/text_mining_example.html#/25,  
+
+"Naive Bayes classification needs present or absent info on each word in a message. We have counts of occurances. Convert the document-term matrices."
+```{r}
+
+#Convert count info to "Yes" or "No"
+
+convert_count <- function(x) {
+  x <- ifelse(x > 0, "Yes", "No")
+}
+
+
+#Convert document-term matrices:
+email_train <- apply(email_train, 2, convert_count) 
+email_test <- apply(email_test, 2, convert_count)
+
+```
+
+
+### Create a classifier for each email.
+
+```{r}
+#Create naive Bayes classifier object
+email_classifier <- naiveBayes(email_train, factor(dataTrain$type))
+
+class(email_classifier) #verify the class of this classifier
+```
+### Evaluate the model on test data 
+
+```{r}
+# Predictions on test data
+email_pred <- predict(email_classifier, newdata=email_test)
+
+table(email_pred, dataTest$type)
+
+```
+### Conclusion
+
+Based on the email_predicion reusuts, the model I built performed did not perform well. It only accurately predicted 64% (183/286) emails as "ham", and 31% (65/94) emails as "spam".  Given more time, I would review/ rewrite my algorithm in search of a better outcome. 
+
+
+#### References: 
+  - 1) "How to Generate Word Clouds in R", https://towardsdatascience.com/create-a-word-cloud-with-r-bde3e7422e8a 
+
+  - 2) https://www3.nd.edu/~steve/computing_with_data/20_text_mining/text_mining_example.html#/1 
+
